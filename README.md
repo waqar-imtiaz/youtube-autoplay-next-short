@@ -1,32 +1,63 @@
-# YouTube Shorts Autoplay — README
+## 🎬 YouTube Shorts Autoplay (with Transparent Overlay Controls)
 
-A small browser console script that automatically advances to the next YouTube Short when the current Short ends. It handles dynamically-replaced `<video>` elements, searches for YouTube's "Next video" button (with multiple fallbacks), and exposes simple controls to stop or force the next Short.
-
----
-
-## Features
-
-* Automatically clicks the **Next video** button when a Short ends.
-* Works with dynamically replaced `<video>` elements (MutationObserver).
-* Uses both `ended` and `timeupdate` events to be robust against missed `ended` events.
-* Exposes two global controls:
-
-  * `stopAutoplayShorts()` — stop and clean up the script.
-  * `forceNextShort()` — immediately click the Next button.
+Automatically plays the next YouTube Short once the current one ends — just like TikTok or Reels.
+Includes an **on-screen transparent overlay** that lets you pause, resume, skip, or stop autoplay anytime.
 
 ---
 
-## Usage (paste into browser console)
+### 🧩 Features
 
-1. Open any YouTube Short page (e.g. `https://www.youtube.com/shorts/...`) in desktop browser.
-2. Open Developer Tools → Console (`F12` or `Ctrl+Shift+I`).
-3. Paste the script below and press Enter.
+* ✅ **Autoplays** next short automatically
+* ⏳ **2-second delay** before playing the next video (to give you time to react)
+* 🧊 **Transparent floating overlay** with full control panel
+* ⏸️ **Pause / Resume** autoplay
+* ⏭️ **Force Next** manually skip to next short
+* 🛑 **Stop** autoplay and remove overlay
+* 🧹 Automatically attaches to new videos when the page changes
+* ⚡ Runs directly from browser console — no extensions required
+
+---
+
+### 🚀 How to Use
+
+1. Open **any YouTube Short** in your browser.
+2. Open **Developer Tools → Console** (`Ctrl+Shift+I` or `F12`).
+3. Paste the following code and press **Enter**:
 
 ```js
-// Paste this into the Console on a YouTube Shorts page
-(function initAutoplayNextShorts({delay = 400} = {}) {
+(function initAutoplayNextShortsUI({ delay = 2000 } = {}) {
+  if (window.__ytShortsAutoplayInitialized) {
+    console.log('Autoplay already running. Use overlay controls or stopAutoplayShorts()');
+    return;
+  }
+  window.__ytShortsAutoplayInitialized = true;
+
   let currentVideo = null;
   let mo = null;
+  let paused = false;
+  let stopped = false;
+  const overlayId = 'yt-autoplay-overlay-controls';
+
+  function updateOverlayStatus(text) {
+    const s = document.getElementById(overlayId + '-status');
+    if (s) s.textContent = 'Autoplay: ' + text;
+    console.log('Autoplay status:', text);
+  }
+
+  function updateOverlayButtons() {
+    const overlay = document.getElementById(overlayId);
+    if (!overlay) return;
+    const [pauseBtn, resumeBtn, nextBtn, stopBtn] = overlay.querySelectorAll('button');
+    if (paused) {
+      pauseBtn.disabled = true;
+      resumeBtn.disabled = false;
+    } else {
+      pauseBtn.disabled = false;
+      resumeBtn.disabled = true;
+    }
+    stopBtn.disabled = false;
+    nextBtn.disabled = stopped;
+  }
 
   const selectors = [
     'button[aria-label="Next video"]',
@@ -40,7 +71,6 @@ A small browser console script that automatically advances to the next YouTube S
       const btn = document.querySelector(sel);
       if (btn) return btn;
     }
-    // last resort: look for any button whose aria-label or text contains "next"
     return Array.from(document.querySelectorAll('button')).find(b => {
       const a = (b.getAttribute('aria-label') || '').toLowerCase();
       const t = (b.innerText || '').toLowerCase();
@@ -49,40 +79,41 @@ A small browser console script that automatically advances to the next YouTube S
   }
 
   function clickNext() {
+    if (paused || stopped) return false;
     const btn = findNextButton();
     if (!btn) {
       console.warn('Autoplay: Next button not found.');
       return false;
     }
-    try {
-      btn.click();
-      console.log('Autoplay: clicked Next ▶️', btn);
-      return true;
-    } catch (err) {
-      console.warn('Autoplay: click failed — trying dispatchEvent', err);
-      btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-      return true;
-    }
+    btn.click();
+    console.log('Autoplay: clicked Next ▶️');
+    updateOverlayStatus('Next short ▶️');
+    return true;
   }
 
   function onEndedHandler() {
-    // small delay so UI can settle
-    setTimeout(() => clickNext(), delay);
+    if (paused || stopped) return;
+    updateOverlayStatus('Video ended — waiting ' + delay + 'ms');
+    setTimeout(() => {
+      if (!paused && !stopped) clickNext();
+    }, delay);
   }
 
   function onTimeUpdateHandler(e) {
+    if (paused || stopped) return;
     const v = e.target;
     if (!v || !v.duration || isNaN(v.duration)) return;
     const remaining = v.duration - v.currentTime;
-    // when ~300ms left, trigger next to avoid missed 'ended' events
     if (remaining > 0 && remaining < 0.35) {
-      clickNext();
+      updateOverlayStatus('Near end — waiting ' + delay + 'ms');
+      setTimeout(() => {
+        if (!paused && !stopped) clickNext();
+      }, delay);
     }
   }
 
   function attachToVideo(v) {
     if (!v || v === currentVideo) return;
-    // detach from previous
     if (currentVideo) {
       currentVideo.removeEventListener('ended', onEndedHandler);
       currentVideo.removeEventListener('timeupdate', onTimeUpdateHandler);
@@ -90,86 +121,133 @@ A small browser console script that automatically advances to the next YouTube S
     currentVideo = v;
     currentVideo.addEventListener('ended', onEndedHandler);
     currentVideo.addEventListener('timeupdate', onTimeUpdateHandler);
-    console.log('Autoplay: attached to video element', currentVideo);
+    updateOverlayStatus('Attached to video');
+    console.log('Autoplay: attached to video element');
   }
 
-  // MutationObserver to catch dynamic replacements
-  mo = new MutationObserver(() => {
-    const v = document.querySelector('video');
-    if (v) attachToVideo(v);
-  });
-  mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  function createOverlay() {
+    if (document.getElementById(overlayId)) return;
+    const overlay = document.createElement('div');
+    overlay.id = overlayId;
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      top: '12px',
+      right: '12px',
+      zIndex: 2147483647,
+      backdropFilter: 'blur(4px)',
+      background: 'rgba(0,0,0,0.25)',
+      color: '#fff',
+      padding: '8px 10px',
+      borderRadius: '10px',
+      fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      boxShadow: '0 6px 18px rgba(0,0,0,0.35)',
+      pointerEvents: 'auto'
+    });
 
-  // initial attach if video already present
-  attachToVideo(document.querySelector('video'));
+    const status = document.createElement('div');
+    status.id = overlayId + '-status';
+    Object.assign(status.style, {
+      fontSize: '12px',
+      minWidth: '140px',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    });
+    status.textContent = 'Autoplay: running';
 
-  // expose controls
-  window.stopAutoplayShorts = function stopAutoplayShorts() {
+    function makeBtn(text, onClick) {
+      const b = document.createElement('button');
+      b.textContent = text;
+      Object.assign(b.style, {
+        border: 'none',
+        padding: '6px 8px',
+        fontSize: '13px',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        background: 'rgba(255,255,255,0.06)',
+        color: '#fff'
+      });
+      b.addEventListener('mouseenter', () => b.style.background = 'rgba(255,255,255,0.12)');
+      b.addEventListener('mouseleave', () => b.style.background = 'rgba(255,255,255,0.06)');
+      b.addEventListener('click', onClick);
+      return b;
+    }
+
+    const pauseBtn = makeBtn('Pause', () => window.pauseAutoplayShorts());
+    const resumeBtn = makeBtn('Resume', () => window.resumeAutoplayShorts());
+    const nextBtn = makeBtn('Next ▶', () => window.forceNextShort());
+    const stopBtn = makeBtn('Stop ✖', () => window.stopAutoplayShorts());
+    overlay.append(status, pauseBtn, resumeBtn, nextBtn, stopBtn);
+    document.body.appendChild(overlay);
+    updateOverlayButtons();
+  }
+
+  function pauseAutoplayShorts() {
+    if (stopped) return;
+    paused = true;
+    updateOverlayStatus('Paused');
+    updateOverlayButtons();
+  }
+
+  function resumeAutoplayShorts() {
+    if (stopped) return;
+    paused = false;
+    updateOverlayStatus('Running');
+    updateOverlayButtons();
+  }
+
+  function stopAutoplayShorts() {
+    stopped = true;
+    paused = false;
     if (mo) mo.disconnect();
     if (currentVideo) {
       currentVideo.removeEventListener('ended', onEndedHandler);
       currentVideo.removeEventListener('timeupdate', onTimeUpdateHandler);
       currentVideo = null;
     }
-    window.stopAutoplayShorts = undefined;
-    window.forceNextShort = undefined;
-    console.log('Autoplay: stopped.');
-  };
+    const overlay = document.getElementById(overlayId);
+    if (overlay) overlay.remove();
+    delete window.forceNextShort;
+    delete window.pauseAutoplayShorts;
+    delete window.resumeAutoplayShorts;
+    delete window.stopAutoplayShorts;
+    window.__ytShortsAutoplayInitialized = false;
+    console.log('Autoplay stopped and cleaned up.');
+  }
+
+  mo = new MutationObserver(() => {
+    if (stopped) return;
+    const v = document.querySelector('video');
+    if (v) attachToVideo(v);
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  attachToVideo(document.querySelector('video'));
+  createOverlay();
+
   window.forceNextShort = clickNext;
+  window.pauseAutoplayShorts = pauseAutoplayShorts;
+  window.resumeAutoplayShorts = resumeAutoplayShorts;
+  window.stopAutoplayShorts = stopAutoplayShorts;
 
-  console.log('Autoplay next Shorts initialized — delay:', delay, 'ms. Use stopAutoplayShorts() to stop.');
-
-})({ delay: 500 });
+  updateOverlayStatus(`Running (delay ${delay}ms)`);
+  console.log('✅ YouTube Shorts Autoplay initialized with overlay and 2s delay.');
+})();
 ```
 
 ---
 
-## Configuration
+### 🧠 Optional Global Functions
 
-* `delay` (milliseconds) — small delay after `ended` event before clicking Next. Default in example: `500`. You can change this by editing the argument passed to the IIFE:
+Once the script is active, you can call these in the console anytime:
 
-  ```js
-  ({ delay: 300 }) // faster
-  ({ delay: 800 }) // slower
-  ```
+```js
+pauseAutoplayShorts();  // Pause autoplay
+resumeAutoplayShorts(); // Resume autoplay
+forceNextShort();       // Skip to next short
+stopAutoplayShorts();   // Stop autoplay & remove overlay
+```
 
----
-
-## Controls / API
-
-* `stopAutoplayShorts()` — call in console to remove observers and event listeners, and to clean up globals.
-* `forceNextShort()` — call in console to immediately attempt to click the Next button.
-
----
-
-## Troubleshooting
-
-* If console logs show `Next button not found.`, YouTube has likely changed the DOM or button attributes. Paste the console output here (or inspect the button's `aria-label`/classes) and update the selectors array accordingly.
-* If the script attaches but doesn't trigger, try increasing `delay` to give UI more time to update.
-* Some browser extensions or content blockers may prevent the script from clicking the button; try disabling them temporarily.
-* Mobile layouts and the YouTube app behave differently; this script targets desktop web Shorts.
-
----
-
-## Tampermonkey / Greasemonkey (optional)
-
-If you want the script to run automatically, wrap it into a userscript and install via Tampermonkey. Note: running such scripts automatically may violate YouTube's Terms of Service — use at your own risk.
-
----
-
-## Compatibility
-
-* Designed for desktop browsers (Chrome, Firefox, Edge) on the YouTube web UI.
-* May break if YouTube changes classes/attributes for the Next button or the Shorts layout.
-
----
-
-## Security & Disclaimer
-
-This script only automates button clicks in your browser. Use responsibly. The author is not responsible for any account issues or policy violations resulting from automated behavior. Running scripts on websites may violate terms of service — proceed at your own risk.
-
----
-
-## License
-
-MIT License — use, modify, and distribute freely.
